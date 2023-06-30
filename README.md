@@ -1,5 +1,5 @@
-# `qiskit-tket-passes`: Qiskit transpiler with tket passes
-Use [tket passes](https://cqcl.github.io/tket/pytket/api/passes.html) in [Qiskit](https://qiskit.org/)'s transpiler!
+# `qiskit-tket-passes`: Qiskit transpiler with TKET passes
+Use [TKET passes](https://cqcl.github.io/tket/pytket/api/passes.html) in [Qiskit](https://qiskit.org/)'s transpiler!
 
 
 
