@@ -1,4 +1,5 @@
 matplotlib
+qiskit-ibm-provider
 pylatexenc
 ipython<7.22.0
 ipykernel<5.5.2
