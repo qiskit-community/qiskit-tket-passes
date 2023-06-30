@@ -1,0 +1,7 @@
+matplotlib
+pylatexenc
+ipython<7.22.0
+ipykernel<5.5.2
+ipywidgets>=7.3.0
+jupyter
+pydot

@@ -14,3 +14,8 @@ Run the tests:
 ```
 python -m unittest discover test
 ```
+
+In order to run [test.ipynb](test.ipynb):
+```
+pip install -r requirements-dev.txt
+```
