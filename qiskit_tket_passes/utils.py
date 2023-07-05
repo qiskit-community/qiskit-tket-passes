@@ -5,7 +5,19 @@ import pytket.passes as tkps
 
 def get_arguments_from_doc(tket_pass):
     arguments = []
-    synopsis_line = pydoc.splitdoc(pydoc.getdoc(tket_pass))[0]
+
+    _doc = pydoc.getdoc(tket_pass)
+    if 'Overloaded function.' in _doc:
+        #Return the first signature
+        #TODO: We should return all possible signatures. This would requires changes in ToQiskitPass also.
+        matches = re.findall("[1-9]\. (" + tket_pass.__name__ + '[^\n]+)', _doc)
+        synopsis_line = matches[0]
+    else:
+        synopsis_line = pydoc.splitdoc(_doc)[0]
+
+    # To avoid issue caused by callable parentheses:
+    synopsis_line = re.sub('Callable\[\[[^\[]+\][^\[]+\]', 'Callable', synopsis_line)
+
     match = re.search("\(([^(]+)\)", synopsis_line)
     if match is not None:
         splitted_args = match.group(1).split(', ')

@@ -1,11 +1,13 @@
 import re
 from collections import OrderedDict
 
+from qiskit import QuantumCircuit
 from qiskit.transpiler import TransformationPass
 from qiskit.transpiler.target import Target, target_to_backend_properties
 from pytket.architecture import Architecture
 from pytket.circuit import OpType
 from pytket.passes import BasePass
+from pytket.passes._decompositions import _TK1_to_X_SX_Rz, _TK1_to_U
 from pytket.transform import CXConfigType, PauliSynthStrat
 from pytket.extensions.qiskit import qiskit_to_tk
 from pytket.placement import GraphPlacement, LinePlacement, NoiseAwarePlacement
@@ -20,8 +22,8 @@ def ToQiskitPass(tket_pass, target: Target = None, **kwargs):
                 _dict = tket_pass.to_dict()
                 class_name = _dict[_dict['pass_class']]['name']
 
-                self.requires = [] # <== See
-                self.preserves = [] # <== See
+                self.requires = []
+                self.preserves = []
             else:
                 self.target = target
                 super().__init__()
@@ -40,9 +42,10 @@ def ToQiskitPass(tket_pass, target: Target = None, **kwargs):
                                 for edge in arc:
                                     connections.append(tuple(edge))
                                 arc = Architecture(connections)
+                            self._args_dict[arg_name] = arc
                         elif self.target:
                             arc = self._arch_from_target()
-                        self._args_dict[arg_name] = arc
+                            self._args_dict[arg_name] = arc
                     elif arg_type.endswith('placement.Placement'):
                         if arg_name in kwargs:
                             placer_str = kwargs.pop(arg_name)
@@ -66,11 +69,17 @@ def ToQiskitPass(tket_pass, target: Target = None, **kwargs):
                             circ = kwargs.pop(arg_name)
                             tkcirc = qiskit_to_tk(circ)
                             self._args_dict[arg_name] = tkcirc
-                        elif self.target and class_name == 'DecomposeSwapsToCircuit' and arg_name == 'replacement_circuit':
-                            # Construct SWAP replacement circuit based on target's gate set.
-                            circ = self._swap_decomposition_from_target()
-                            tkcirc = qiskit_to_tk(circ)
-                            self._args_dict[arg_name] = tkcirc
+                        elif self.target:
+                            if class_name == 'DecomposeSwapsToCircuit' and arg_name == 'replacement_circuit':
+                                # Construct SWAP replacement circuit based on target's gate set.
+                                circ = self._swap_decomposition_from_target()
+                                tkcirc = qiskit_to_tk(circ)
+                                self._args_dict[arg_name] = tkcirc
+                            elif class_name == 'RebaseCustom' and arg_name == 'cx_replacement':
+                                # Construct CNOT replacement circuit based on target's gate set.
+                                circ = self._cnot_decomposition_from_target()
+                                tkcirc = qiskit_to_tk(circ)
+                                self._args_dict[arg_name] = tkcirc
                     elif arg_type.endswith('circuit.OpType'):
                         if arg_name in kwargs:
                             op_str = kwargs.pop(arg_name)
@@ -78,13 +87,18 @@ def ToQiskitPass(tket_pass, target: Target = None, **kwargs):
                             self._args_dict[arg_name] = op_type
                     elif re.match("Set\[.+\.circuit\.OpType\]", arg_type) is not None:
                         if arg_name in kwargs:
-                            op_strs = kwargs.pop(arg_name)
-                            if all(isinstance(elem, str) for elem in op_strs):
+                            _value = kwargs.pop(arg_name)
+                            if all(isinstance(elem, str) for elem in _value):
                                 op_types = set()
-                                for op_str in op_strs:
+                                for op_str in _value:
                                     op_types.add(self._optype_from_str(op_str))
-                                #print(op_types)
+
                                 self._args_dict[arg_name] = op_types
+                            elif isinstance(_value, set) and all(isinstance(elem, OpType) for elem in _value):
+                                self._args_dict[arg_name] = _value
+                        elif self.target and class_name == 'RebaseCustom' and arg_name == 'gateset':
+                            # Get the target's gate set.
+                            self._args_dict[arg_name] = self._gateset_from_target()
                     elif arg_type.endswith('transform.PauliSynthStrat'):
                         if arg_name in kwargs:
                             strategy = kwargs.pop(arg_name)
@@ -106,6 +120,11 @@ def ToQiskitPass(tket_pass, target: Target = None, **kwargs):
                             }
                             value = cx_config_map[cx_config]
                             self._args_dict[arg_name] = value
+                    elif arg_name == 'tk1_replacement':
+                        if self.target:
+                            self._args_dict[arg_name] = self._tk1_replacement_from_target()
+                        else:
+                            self._args_dict[arg_name] = _TK1_to_U
                     else:
                         if arg_name in kwargs:
                             value = kwargs.pop(arg_name)
@@ -126,6 +145,7 @@ def ToQiskitPass(tket_pass, target: Target = None, **kwargs):
             else:
                 raise ValueError(f"{__class__.__name__} has no argument with the name {arg_name}.")
 
+        #TODO: May be we should move the following methods to utils file instead of having them as class methods
         def _optype_from_str(self, op_str):
             for op_type in dir(OpType):
                 if op_str.upper() == op_type.upper():
@@ -145,15 +165,41 @@ def ToQiskitPass(tket_pass, target: Target = None, **kwargs):
             }
             return OpType.from_name(ops_map[op_str])
 
+        def _gateset_from_target(self):
+
+            operation_names = list(self.target.operation_names)
+            for op in ['delay', 'if_else', 'rzx']:
+                if op in operation_names:
+                    operation_names.remove(op)
+
+            return { self._optype_from_str(op_str) for op_str in operation_names }
+
         def _arch_from_target(self):
             _coupling_map = self.target.build_coupling_map()
-            return Architecture(_coupling_map.get_edges())
-        
+            if _coupling_map is None:
+                return Architecture([])
+            else:
+                return Architecture(_coupling_map.get_edges())
+
+        def _cnot_decomposition_from_target(self):
+            circ = QuantumCircuit(2)
+            circ.cx(0, 1)
+            if 'cx' not in self.target.operation_names:
+                from qiskit import transpile
+                circ = transpile(circ, basis_gates=list(self.target.operation_names))
+            return circ
+
         def _swap_decomposition_from_target(self):
-            from qiskit import QuantumCircuit, transpile
+            from qiskit import transpile
             circ = QuantumCircuit(2)
             circ.swap(0, 1)
             return transpile(circ, basis_gates=list(self.target.operation_names))
+
+        def _tk1_replacement_from_target(self):
+            if {'x', 'sx', 'rz'}.issubset(self.target.operation_names):
+                return _TK1_to_X_SX_Rz
+            else:
+                return _TK1_to_U
 
         def _noise_aware_placer_from_target(self):
             """
@@ -168,42 +214,44 @@ def ToQiskitPass(tket_pass, target: Target = None, **kwargs):
             edge_errors = defaultdict(dict)
             readout_errors = {}
 
-            properties = target_to_backend_properties(target)
             coupling_map = target.build_coupling_map()
-            for gate in properties.gates:
-                for param in gate.parameters:
-                    if param.name == 'gate_error':
-                        optype = self._optype_from_str(gate.gate)
-                        gate_error = param.value
-                        if len(gate.qubits) == 1:
-                            node_errors[Node(gate.qubits[0])].update({optype: gate_error})
-                        else:
-                            edge_errors[(Node(gate.qubits[0]), Node(gate.qubits[1]))].update({optype: gate_error})
-                            if gate.qubits[::-1] not in coupling_map:
-                                edge_errors[(Node(gate.qubits[1]), Node(gate.qubits[0]))].update({optype: 2 * gate_error})
-
-            for n in range(target.num_qubits):
-                readout_error = properties.readout_error(n)
-                readout_errors[Node(n)] = [       
-                    [1.0 - readout_error, readout_error],
-                    [readout_error, 1.0 - readout_error],
-                ]
-
-            avg = lambda xs: sum(xs.values()) / len(xs)
-            avg_mat = (lambda xs: (xs[0][1] + xs[1][0]) / 2.0)
-            map_values = lambda f, d: { k: f(v) for k, v in d.items() }
-
-            avg_node_errors = map_values(avg, node_errors)
-            avg_edge_errors = map_values(avg, edge_errors)
-            avg_readout_errors = map_values(avg_mat, readout_errors)
-
             arc = self._arch_from_target()
+            properties = target_to_backend_properties(target)
+            if properties is None:
+                return None
+            else:
+                for gate in properties.gates:
+                    for param in gate.parameters:
+                        if param.name == 'gate_error':
+                            optype = self._optype_from_str(gate.gate)
+                            gate_error = param.value
+                            if len(gate.qubits) == 1:
+                                node_errors[Node(gate.qubits[0])].update({optype: gate_error})
+                            else:
+                                edge_errors[(Node(gate.qubits[0]), Node(gate.qubits[1]))].update({optype: gate_error})
+                                if gate.qubits[::-1] not in coupling_map:
+                                    edge_errors[(Node(gate.qubits[1]), Node(gate.qubits[0]))].update({optype: 2 * gate_error})
 
-            return NoiseAwarePlacement(
-                arc,
-                avg_node_errors,
-                avg_edge_errors,
-                avg_readout_errors
-            )
+                for n in range(target.num_qubits):
+                    readout_error = properties.readout_error(n)
+                    readout_errors[Node(n)] = [       
+                        [1.0 - readout_error, readout_error],
+                        [readout_error, 1.0 - readout_error],
+                    ]
+
+                avg = lambda xs: sum(xs.values()) / len(xs)
+                avg_mat = (lambda xs: (xs[0][1] + xs[1][0]) / 2.0)
+                map_values = lambda f, d: { k: f(v) for k, v in d.items() }
+
+                avg_node_errors = map_values(avg, node_errors)
+                avg_edge_errors = map_values(avg, edge_errors)
+                avg_readout_errors = map_values(avg_mat, readout_errors)
+
+                return NoiseAwarePlacement(
+                    arc,
+                    avg_node_errors,
+                    avg_edge_errors,
+                    avg_readout_errors
+                )
 
     return TketPassClass(target, **kwargs)
