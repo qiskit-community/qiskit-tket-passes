@@ -232,8 +232,13 @@ def ToQiskitPass(tket_pass, target: Target = None, **kwargs):
                                 if gate.qubits[::-1] not in coupling_map:
                                     edge_errors[(Node(gate.qubits[1]), Node(gate.qubits[0]))].update({optype: 2 * gate_error})
 
+                props_dict = properties.to_dict()
                 for n in range(target.num_qubits):
-                    readout_error = properties.readout_error(n)
+                    if len(props_dict['qubits']) > n:
+                        readout_error = properties.readout_error(n)
+                    else:
+                        readout_error = 0
+
                     readout_errors[Node(n)] = [       
                         [1.0 - readout_error, readout_error],
                         [readout_error, 1.0 - readout_error],

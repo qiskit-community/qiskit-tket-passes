@@ -87,8 +87,10 @@ class TketOptimizationPassManager(PassManagerStagePlugin):
         if optimization_level == 3:
             passes.append(ToQiskitPass(KAKDecomposition, target=_target_from_pm_config(pass_manager_config), target_2qb_gate='cx', allow_swaps=False))
             passes.append(ToQiskitPass(CliffordSimp, target=_target_from_pm_config(pass_manager_config), allow_swaps=False))
+
             # TODO: Why do we need this?
-            passes.append(ToQiskitPass(CXMappingPass, target=_target_from_pm_config(pass_manager_config), directed_cx=False, delay_measures=False))
+            if pass_manager_config.coupling_map is not None:
+                passes.append(ToQiskitPass(CXMappingPass, target=_target_from_pm_config(pass_manager_config), directed_cx=False, delay_measures=False))
 
         if optimization_level > 1:
             passes.append(ToQiskitPass(SynthesiseTket))
